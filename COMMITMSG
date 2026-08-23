@@ -1,0 +1,7 @@
+fix: zk-credential-verifier: wire up CI workflow pinned to a Protocol-25-ca
+
+- .github/workflows/ci.yml: basic CI workflow
+
+Fixes #134
+
+Signed-off-by: Vedant Madane <6527493+VedantMadane@users.noreply.github.com>
