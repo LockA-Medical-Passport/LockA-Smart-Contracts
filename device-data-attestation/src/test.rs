@@ -49,8 +49,9 @@ impl Fixture {
     }
 
     fn stored_attestation(&self, attestation_id: u64) -> Option<DeviceAttestation> {
-        self.env
-            .as_contract(&self.contract_id, || read_attestation(&self.env, attestation_id))
+        self.env.as_contract(&self.contract_id, || {
+            read_attestation(&self.env, attestation_id)
+        })
     }
 
     fn patient_devices(&self) -> Vec<BytesN<32>> {
@@ -219,7 +220,10 @@ fn register_device_rejects_a_duplicate_device_id() {
 
     assert_eq!(result, Err(Ok(Error::DeviceAlreadyRegistered)));
     // The original registration must survive an attempted overwrite.
-    assert_eq!(fixture.stored_device(&device_id).unwrap().owner, fixture.owner);
+    assert_eq!(
+        fixture.stored_device(&device_id).unwrap().owner,
+        fixture.owner
+    );
 }
 
 #[test]
@@ -466,7 +470,9 @@ fn submit_attestation_records_a_valid_signed_reading() {
         Vec::from_array(&fixture.env, [attestation.clone()])
     );
     assert_eq!(
-        fixture.client().get_attestations_for_patient(&fixture.owner),
+        fixture
+            .client()
+            .get_attestations_for_patient(&fixture.owner),
         Vec::from_array(&fixture.env, [attestation])
     );
 }

@@ -1,4 +1,4 @@
-use soroban_sdk::contracttype;
+use soroban_sdk::{contracttype, Address, BytesN, Symbol};
 
 /// The categories of healthcare provider this registry can hold.
 #[contracttype]
@@ -37,6 +37,34 @@ pub enum ProviderStatus {
     Suspended,
     /// The provider has been permanently revoked.
     Revoked,
+}
+
+/// A registered healthcare provider.
+///
+/// `license_hash` is a hash/commitment of the provider's off-chain license
+/// document rather than the document itself, so sensitive material never
+/// touches ledger storage. A provider begins in [`ProviderStatus::Pending`]
+/// with `verified_by == None`; both are populated by an admin during
+/// verification.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Provider {
+    /// Unique, monotonically-allocated identifier for this provider.
+    pub provider_id: u64,
+    /// The Stellar wallet address that controls this provider entry.
+    pub provider_wallet_address: Address,
+    /// The provider's category.
+    pub provider_type: ProviderType,
+    /// Hash/commitment of the provider's off-chain license document.
+    pub license_hash: BytesN<32>,
+    /// The country the provider is licensed in.
+    pub country: Symbol,
+    /// The provider's current verification lifecycle state.
+    pub status: ProviderStatus,
+    /// The admin that verified the provider, or `None` while pending.
+    pub verified_by: Option<Address>,
+    /// Ledger timestamp at which the provider registered.
+    pub registered_at: u64,
 }
 
 /// Returns whether transitioning a provider's status from `from` to `to` is allowed.
