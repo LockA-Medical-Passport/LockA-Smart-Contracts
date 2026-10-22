@@ -98,7 +98,11 @@ pub(crate) fn next_attestation_id(env: &Env) -> u64 {
 /// recording `fingerprint` (a sha256 of the attestation's `(device_id,
 /// reading_hash, recorded_at)` tuple, computed by the caller) so
 /// [`attestation_seen`] can detect a resubmission of the same reading.
-pub(crate) fn write_attestation(env: &Env, attestation: &DeviceAttestation, fingerprint: &BytesN<32>) {
+pub(crate) fn write_attestation(
+    env: &Env,
+    attestation: &DeviceAttestation,
+    fingerprint: &BytesN<32>,
+) {
     let storage = env.storage().persistent();
 
     let attestation_key = DataKey::Attestation(attestation.attestation_id);
@@ -201,7 +205,11 @@ mod tests {
         }
     }
 
-    fn sample_attestation(env: &Env, attestation_id: u64, device_id: BytesN<32>) -> DeviceAttestation {
+    fn sample_attestation(
+        env: &Env,
+        attestation_id: u64,
+        device_id: BytesN<32>,
+    ) -> DeviceAttestation {
         DeviceAttestation {
             attestation_id,
             device_id,
