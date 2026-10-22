@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, BytesN};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN};
 
 /// The classes of medical devices and wearables the registry can approve.
 #[contracttype]
@@ -40,6 +40,35 @@ pub struct Device {
     pub active: bool,
     /// Ledger timestamp at which the device was registered.
     pub registered_at: u64,
+}
+
+/// A single verifiable reading submitted by a registered [`Device`].
+///
+/// `reading_hash` is a hash/commitment of the encrypted off-chain reading
+/// rather than the reading itself, so the payload never touches chain
+/// storage. `recorded_at` is the timestamp the device itself reported for
+/// when the reading was taken, which is distinct from `submitted_at` (the
+/// ledger timestamp at submission) — the two can differ when a device
+/// batches readings offline before submitting them.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceAttestation {
+    /// Unique, monotonically-allocated identifier for this attestation.
+    pub attestation_id: u64,
+    /// The device that submitted this attestation.
+    pub device_id: BytesN<32>,
+    /// The patient this reading belongs to. Must match the device's
+    /// registered `owner` at submission time.
+    pub passport_id: Address,
+    /// Hash/commitment of the encrypted off-chain reading.
+    pub reading_hash: BytesN<32>,
+    /// Device-reported timestamp of when the reading was taken.
+    pub recorded_at: u64,
+    /// Ledger timestamp at which the attestation was submitted on-chain.
+    pub submitted_at: u64,
+    /// Optional pointer/metadata (e.g. an off-chain storage reference).
+    /// Empty when unused.
+    pub issuer_reference: Bytes,
 }
 
 #[cfg(test)]
