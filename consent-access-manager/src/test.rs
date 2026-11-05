@@ -1064,3 +1064,326 @@ fn revoke_access_does_not_publish_an_event_when_it_fails() {
     assert_eq!(result, Err(Ok(Error::RequestNotFound)));
     assert!(fixture.env.events().all().events().is_empty());
 }
+
+// --- integration scenarios: full consent lifecycle ---
+
+#[test]
+fn lifecycle_approve_then_revoke_updates_access_and_emits_events_in_order() {
+    let fixture = Fixture::new();
+    fixture.env.mock_all_auths();
+    let client = fixture.client();
+
+    let access_id = client.request_access(
+        &fixture.provider_id,
+        &fixture.passport_id,
+        &RecordScope::LabResultsOnly,
+        &ONE_DAY,
+    );
+    let requested = AccessRequested {
+        access_id,
+        passport_id: fixture.passport_id.clone(),
+        provider_id: fixture.provider_id.clone(),
+        record_scope: RecordScope::LabResultsOnly,
+    };
+    assert_eq!(
+        fixture.env.events().all(),
+        [requested.to_xdr(&fixture.env, &fixture.contract_id)]
+    );
+
+    client.approve_access(&fixture.passport_id, &access_id);
+    let approved = AccessApproved {
+        access_id,
+        passport_id: fixture.passport_id.clone(),
+        provider_id: fixture.provider_id.clone(),
+    };
+    assert_eq!(
+        fixture.env.events().all(),
+        [approved.to_xdr(&fixture.env, &fixture.contract_id)]
+    );
+
+    assert!(client.check_access(
+        &fixture.passport_id,
+        &fixture.provider_id,
+        &RecordScope::LabResultsOnly,
+    ));
+    let active = client.get_active_permissions(&fixture.passport_id);
+    assert_eq!(active.len(), 1);
+    assert_eq!(active.get(0).unwrap().access_id, access_id);
+
+    let revoked_at = REQUESTED_AT + 500;
+    fixture.env.ledger().set_timestamp(revoked_at);
+    client.revoke_access(&fixture.passport_id, &access_id);
+    let revoked = AccessRevoked {
+        access_id,
+        passport_id: fixture.passport_id.clone(),
+        provider_id: fixture.provider_id.clone(),
+        revoked_at,
+    };
+    assert_eq!(
+        fixture.env.events().all(),
+        [revoked.to_xdr(&fixture.env, &fixture.contract_id)]
+    );
+
+    assert!(!client.check_access(
+        &fixture.passport_id,
+        &fixture.provider_id,
+        &RecordScope::LabResultsOnly,
+    ));
+    assert!(client
+        .get_active_permissions(&fixture.passport_id)
+        .is_empty());
+}
+
+#[test]
+fn lifecycle_rejection_denies_access_and_emits_events_in_order() {
+    let fixture = Fixture::new();
+    fixture.env.mock_all_auths();
+    let client = fixture.client();
+
+    let access_id = client.request_access(
+        &fixture.provider_id,
+        &fixture.passport_id,
+        &RecordScope::PrescriptionsOnly,
+        &ONE_DAY,
+    );
+    let requested = AccessRequested {
+        access_id,
+        passport_id: fixture.passport_id.clone(),
+        provider_id: fixture.provider_id.clone(),
+        record_scope: RecordScope::PrescriptionsOnly,
+    };
+    assert_eq!(
+        fixture.env.events().all(),
+        [requested.to_xdr(&fixture.env, &fixture.contract_id)]
+    );
+
+    client.reject_access(&fixture.passport_id, &access_id);
+    let rejected = AccessRejected {
+        access_id,
+        passport_id: fixture.passport_id.clone(),
+        provider_id: fixture.provider_id.clone(),
+    };
+    assert_eq!(
+        fixture.env.events().all(),
+        [rejected.to_xdr(&fixture.env, &fixture.contract_id)]
+    );
+
+    assert!(!client.check_access(
+        &fixture.passport_id,
+        &fixture.provider_id,
+        &RecordScope::PrescriptionsOnly,
+    ));
+    assert!(client
+        .get_active_permissions(&fixture.passport_id)
+        .is_empty());
+}
+
+#[test]
+fn lifecycle_natural_expiry_denies_access_without_a_revocation() {
+    let fixture = Fixture::new();
+    fixture.env.mock_all_auths();
+    let client = fixture.client();
+
+    let short_duration = 60;
+    let access_id = client.request_access(
+        &fixture.provider_id,
+        &fixture.passport_id,
+        &RecordScope::VaccinationRecordsOnly,
+        &short_duration,
+    );
+    client.approve_access(&fixture.passport_id, &access_id);
+    let approved = AccessApproved {
+        access_id,
+        passport_id: fixture.passport_id.clone(),
+        provider_id: fixture.provider_id.clone(),
+    };
+    assert_eq!(
+        fixture.env.events().all(),
+        [approved.to_xdr(&fixture.env, &fixture.contract_id)]
+    );
+
+    let expires_at = REQUESTED_AT + short_duration;
+    fixture.env.ledger().set_timestamp(expires_at - 1);
+    assert!(client.check_access(
+        &fixture.passport_id,
+        &fixture.provider_id,
+        &RecordScope::VaccinationRecordsOnly,
+    ));
+
+    fixture.env.ledger().set_timestamp(expires_at);
+    assert!(!client.check_access(
+        &fixture.passport_id,
+        &fixture.provider_id,
+        &RecordScope::VaccinationRecordsOnly,
+    ));
+    assert!(client
+        .get_active_permissions(&fixture.passport_id)
+        .is_empty());
+    assert!(
+        fixture.env.events().all().events().is_empty(),
+        "natural expiry is lazy: read-only checks must not emit an event"
+    );
+}
+
+// --- edge cases: multi-provider and scope isolation ---
+
+#[test]
+fn revoking_one_providers_grant_does_not_affect_another_providers_grant() {
+    let fixture = Fixture::new();
+    fixture.env.mock_all_auths();
+
+    let provider_a = fixture.provider_id.clone();
+    let provider_b = Address::generate(&fixture.env);
+    let access_a =
+        fixture.create_and_approve_request(&provider_a, RecordScope::LabResultsOnly, ONE_DAY);
+    let access_b =
+        fixture.create_and_approve_request(&provider_b, RecordScope::PrescriptionsOnly, ONE_DAY);
+
+    assert!(fixture.client().check_access(
+        &fixture.passport_id,
+        &provider_a,
+        &RecordScope::LabResultsOnly,
+    ));
+    assert!(fixture.client().check_access(
+        &fixture.passport_id,
+        &provider_b,
+        &RecordScope::PrescriptionsOnly,
+    ));
+
+    fixture
+        .client()
+        .revoke_access(&fixture.passport_id, &access_a);
+
+    assert!(!fixture.client().check_access(
+        &fixture.passport_id,
+        &provider_a,
+        &RecordScope::LabResultsOnly,
+    ));
+    assert!(
+        fixture.client().check_access(
+            &fixture.passport_id,
+            &provider_b,
+            &RecordScope::PrescriptionsOnly,
+        ),
+        "revoking one provider's grant must not affect another provider's grant"
+    );
+
+    let active = fixture
+        .client()
+        .get_active_permissions(&fixture.passport_id);
+    assert_eq!(active.len(), 1);
+    assert_eq!(active.get(0).unwrap().access_id, access_b);
+}
+
+#[test]
+fn lab_results_and_prescriptions_grants_are_scope_isolated() {
+    let fixture = Fixture::new();
+    fixture.env.mock_all_auths();
+
+    let lab_provider = fixture.provider_id.clone();
+    let prescription_provider = Address::generate(&fixture.env);
+    fixture.create_and_approve_request(&lab_provider, RecordScope::LabResultsOnly, ONE_DAY);
+    fixture.create_and_approve_request(
+        &prescription_provider,
+        RecordScope::PrescriptionsOnly,
+        ONE_DAY,
+    );
+
+    assert!(fixture.client().check_access(
+        &fixture.passport_id,
+        &lab_provider,
+        &RecordScope::LabResultsOnly,
+    ));
+    assert!(!fixture.client().check_access(
+        &fixture.passport_id,
+        &lab_provider,
+        &RecordScope::PrescriptionsOnly,
+    ));
+
+    assert!(fixture.client().check_access(
+        &fixture.passport_id,
+        &prescription_provider,
+        &RecordScope::PrescriptionsOnly,
+    ));
+    assert!(!fixture.client().check_access(
+        &fixture.passport_id,
+        &prescription_provider,
+        &RecordScope::LabResultsOnly,
+    ));
+}
+
+#[test]
+fn emergency_summary_grant_does_not_cover_insurance_data() {
+    let fixture = Fixture::new();
+    fixture.env.mock_all_auths();
+
+    fixture.create_and_approve_request(
+        &fixture.provider_id.clone(),
+        RecordScope::EmergencySummaryOnly,
+        ONE_DAY,
+    );
+
+    assert!(fixture.client().check_access(
+        &fixture.passport_id,
+        &fixture.provider_id,
+        &RecordScope::EmergencySummaryOnly,
+    ));
+    assert!(!fixture.client().check_access(
+        &fixture.passport_id,
+        &fixture.provider_id,
+        &RecordScope::InsuranceDataOnly,
+    ));
+}
+
+#[test]
+fn duplicate_active_requests_create_independent_grants() {
+    let fixture = Fixture::new();
+    fixture.env.mock_all_auths();
+
+    let first_id = fixture.create_and_approve_request(
+        &fixture.provider_id.clone(),
+        RecordScope::LabResultsOnly,
+        ONE_DAY,
+    );
+
+    // Re-requesting the same provider/scope pair is allowed; it allocates a
+    // new request rather than replacing or reusing the active one.
+    let second_id = fixture.client().request_access(
+        &fixture.provider_id,
+        &fixture.passport_id,
+        &RecordScope::LabResultsOnly,
+        &ONE_DAY,
+    );
+    assert_ne!(first_id, second_id);
+    fixture
+        .client()
+        .approve_access(&fixture.passport_id, &second_id);
+
+    let active = fixture
+        .client()
+        .get_active_permissions(&fixture.passport_id);
+    assert_eq!(active.len(), 2);
+    assert_eq!(active.get(0).unwrap().access_id, first_id);
+    assert_eq!(active.get(1).unwrap().access_id, second_id);
+
+    fixture
+        .client()
+        .revoke_access(&fixture.passport_id, &first_id);
+    assert!(
+        fixture.client().check_access(
+            &fixture.passport_id,
+            &fixture.provider_id,
+            &RecordScope::LabResultsOnly,
+        ),
+        "the second independent grant must remain active"
+    );
+
+    fixture
+        .client()
+        .revoke_access(&fixture.passport_id, &second_id);
+    assert!(!fixture.client().check_access(
+        &fixture.passport_id,
+        &fixture.provider_id,
+        &RecordScope::LabResultsOnly,
+    ));
+}

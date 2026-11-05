@@ -21,9 +21,13 @@ use crate::RecordScope;
 #[contractevent(topics = ["access", "requested"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccessRequested {
+    /// The newly allocated access request identifier.
     pub access_id: u64,
+    /// The patient passport whose records were requested.
     pub passport_id: Address,
+    /// The provider that created the request.
     pub provider_id: Address,
+    /// The record category requested.
     pub record_scope: RecordScope,
 }
 
@@ -35,8 +39,11 @@ pub struct AccessRequested {
 #[contractevent(topics = ["access", "approved"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccessApproved {
+    /// The approved access request identifier.
     pub access_id: u64,
+    /// The patient passport that granted access.
     pub passport_id: Address,
+    /// The provider that was granted access.
     pub provider_id: Address,
 }
 
@@ -48,8 +55,11 @@ pub struct AccessApproved {
 #[contractevent(topics = ["access", "rejected"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccessRejected {
+    /// The rejected access request identifier.
     pub access_id: u64,
+    /// The patient passport that rejected the request.
     pub passport_id: Address,
+    /// The provider whose request was rejected.
     pub provider_id: Address,
 }
 
@@ -62,8 +72,12 @@ pub struct AccessRejected {
 #[contractevent(topics = ["access", "revoked"])]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccessRevoked {
+    /// The revoked access request identifier.
     pub access_id: u64,
+    /// The patient passport that revoked access.
     pub passport_id: Address,
+    /// The provider whose access was revoked.
     pub provider_id: Address,
+    /// Ledger timestamp at which access was revoked.
     pub revoked_at: u64,
 }
