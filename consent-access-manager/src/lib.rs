@@ -1,5 +1,11 @@
-#![no_std]
+//! Consent and access control for LockA medical passports.
+//!
+//! Providers request access to a patient's records under a [`RecordScope`],
+//! and the patient decides whether to approve, reject, or later revoke that
+//! access. See [`ConsentAccessManager`] for the public contract API and the
+//! re-exported event types for the schema emitted on every state change.
 
+#![no_std]
 use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
 
 mod error;
@@ -12,6 +18,8 @@ pub use events::{AccessApproved, AccessRejected, AccessRequested, AccessRevoked}
 pub use storage::AccessRequest;
 pub use types::RecordScope;
 
+/// The consent and access manager contract, exposing the provider-request and
+/// patient-decision API for record access grants.
 #[contract]
 pub struct ConsentAccessManager;
 
@@ -19,14 +27,33 @@ pub struct ConsentAccessManager;
 impl ConsentAccessManager {
     /// Records a provider's request for access to a patient's records.
     ///
-    /// The request starts unapproved and unexpired: `approved` and `revoked`
-    /// are `false`, and `expires_at` stays `0` until the patient approves it
-    /// and the requested `duration_seconds` window begins. Returns the
-    /// `access_id` allocated to the new request, which the patient uses to
-    /// approve or reject it.
+    /// The request starts unapproved and unrevoked: `approved` and `revoked`
+    /// are `false`, `rejected` is `false`, and `expires_at` stays `0` until
+    /// the patient approves it and the requested `duration_seconds` window
+    /// begins. Emits an [`AccessRequested`] event on success.
     ///
-    /// Only `provider_id` can create the request. Requests for a zero
-    /// duration are rejected with [`Error::InvalidDuration`].
+    /// Requesting the same `provider_id`/`record_scope` combination again
+    /// while an earlier grant is still active is allowed: each call creates a
+    /// new, independent request with its own `access_id`. Access remains
+    /// valid while any one of those grants is active.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider_id` - The provider requesting access; must authorize the
+    ///   call.
+    /// * `passport_id` - The patient passport whose records are requested.
+    /// * `record_scope` - The record categories the provider is asking for.
+    /// * `duration_seconds` - How long access should last once approved; must
+    ///   be greater than zero.
+    ///
+    /// # Returns
+    ///
+    /// The newly allocated `access_id`, which the patient uses to approve or
+    /// reject the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidDuration`] when `duration_seconds` is zero.
     pub fn request_access(
         env: Env,
         provider_id: Address,
@@ -69,18 +96,28 @@ impl ConsentAccessManager {
     /// Approves a pending access request, activating it for the duration the
     /// provider requested.
     ///
-    /// `duration_seconds` is carried from the original [`Self::request_access`]
+    /// `duration_seconds` is carried from the original `request_access`
     /// call rather than accepted again here, so a patient cannot be tricked
     /// into granting a longer window than the one they were shown when the
     /// request was made. `expires_at` is set to `env.ledger().timestamp() +
-    /// duration_seconds` at approval time.
+    /// duration_seconds` at approval time. Emits an [`AccessApproved`] event on
+    /// success.
     ///
-    /// Only `passport_id` can approve its own requests. Fails with
-    /// [`Error::RequestNotFound`] if `access_id` does not exist, with
-    /// [`Error::NotOwner`] if it belongs to a different passport, with
-    /// [`Error::AlreadyRevoked`] if it was revoked, or with
-    /// [`Error::AlreadyRejected`] if it was rejected. Approving an
-    /// already-approved request is allowed and refreshes `expires_at`.
+    /// Approving an already-approved request is allowed and refreshes
+    /// `expires_at` from the current ledger time.
+    ///
+    /// # Arguments
+    ///
+    /// * `passport_id` - The patient passport that owns the request; must
+    ///   authorize the call.
+    /// * `access_id` - The request to approve.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RequestNotFound`] if `access_id` does not exist,
+    /// [`Error::NotOwner`] if it belongs to a different passport,
+    /// [`Error::AlreadyRevoked`] if it was revoked, or
+    /// [`Error::AlreadyRejected`] if it was rejected.
     pub fn approve_access(env: Env, passport_id: Address, access_id: u64) -> Result<(), Error> {
         passport_id.require_auth();
 
@@ -115,14 +152,21 @@ impl ConsentAccessManager {
     /// Rejection is recorded on the request itself via the `rejected` field
     /// (see the doc comment on [`AccessRequest`]) rather than by removing it
     /// from the patient's request index, so the index remains a full consent
-    /// trail.
+    /// trail. Emits an [`AccessRejected`] event on success.
     ///
-    /// Only `passport_id` can reject its own requests. Fails with
-    /// [`Error::RequestNotFound`] if `access_id` does not exist, with
-    /// [`Error::NotOwner`] if it belongs to a different passport, with
-    /// [`Error::AlreadyApproved`] if it was already approved, or with
-    /// [`Error::AlreadyRevoked`] / [`Error::AlreadyRejected`] if it was
-    /// already revoked or rejected.
+    /// # Arguments
+    ///
+    /// * `passport_id` - The patient passport that owns the request; must
+    ///   authorize the call.
+    /// * `access_id` - The request to reject.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RequestNotFound`] if `access_id` does not exist,
+    /// [`Error::NotOwner`] if it belongs to a different passport,
+    /// [`Error::AlreadyApproved`] if it was already approved,
+    /// [`Error::AlreadyRevoked`] if it was already revoked, or
+    /// [`Error::AlreadyRejected`] if it was already rejected.
     pub fn reject_access(env: Env, passport_id: Address, access_id: u64) -> Result<(), Error> {
         passport_id.require_auth();
 
@@ -159,12 +203,21 @@ impl ConsentAccessManager {
     ///
     /// Like rejection, revocation is recorded via the `revoked` field on the
     /// request itself (see the doc comment on [`AccessRequest`]); the entry
-    /// stays in the patient's request index. Revoking an already-revoked
-    /// request is idempotent and succeeds without error, so callers don't
-    /// need to check current state before revoking.
+    /// stays in the patient's request index. Emits an [`AccessRevoked`] event
+    /// on every successful call.
     ///
-    /// Only `passport_id` can revoke its own requests. Fails with
-    /// [`Error::RequestNotFound`] if `access_id` does not exist, or with
+    /// Revoking an already-revoked request is idempotent and succeeds without
+    /// error, so callers don't need to check current state before revoking.
+    ///
+    /// # Arguments
+    ///
+    /// * `passport_id` - The patient passport that owns the request; must
+    ///   authorize the call.
+    /// * `access_id` - The request to revoke.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RequestNotFound`] if `access_id` does not exist, or
     /// [`Error::NotOwner`] if it belongs to a different passport.
     pub fn revoke_access(env: Env, passport_id: Address, access_id: u64) -> Result<(), Error> {
         passport_id.require_auth();
@@ -195,9 +248,21 @@ impl ConsentAccessManager {
     /// Access is valid when a matching request exists with `approved ==
     /// true`, `revoked == false`, `expires_at > env.ledger().timestamp()`,
     /// and either its `record_scope` matches the query or the stored scope is
-    /// `RecordScope::AllRecords`. Read-only: no authorization is required, so
-    /// any caller (e.g. the `medical-record-registry` contract) can invoke
-    /// it. Returns `false`, rather than panicking, when no request matches.
+    /// [`RecordScope::AllRecords`]. Read-only: no authorization is required,
+    /// so any caller (e.g. the `medical-record-registry` contract) can invoke
+    /// it.
+    ///
+    /// # Arguments
+    ///
+    /// * `passport_id` - The patient passport being queried.
+    /// * `provider_id` - The provider whose access is being checked.
+    /// * `record_scope` - The record category the caller wants to access.
+    ///
+    /// # Returns
+    ///
+    /// `true` if at least one active grant for `provider_id` covers
+    /// `record_scope`, or `false` when no request matches. This function never
+    /// panics for missing state.
     pub fn check_access(
         env: Env,
         passport_id: Address,
@@ -227,14 +292,23 @@ impl ConsentAccessManager {
 
     /// Returns every currently active grant for `passport_id`: `approved`,
     /// not `revoked`, and not yet expired, per the same shared `is_active`
-    /// definition also used by [`Self::check_access`].
+    /// definition also used by `check_access`.
     ///
     /// Results are ordered by ascending `access_id`, i.e. the order the
-    /// underlying requests were created in (the order [`Self::request_access`]
+    /// underlying requests were created in (the order `request_access`
     /// appended them to the patient's index).
     ///
     /// Read-only: no authorization is required, since the result only
     /// contains state already scoped to `passport_id`.
+    ///
+    /// # Arguments
+    ///
+    /// * `passport_id` - The patient passport whose active grants are listed.
+    ///
+    /// # Returns
+    ///
+    /// A vector of active [`AccessRequest`] values, empty when the passport has
+    /// no active grants.
     ///
     /// This walks every `access_id` ever recorded for the passport and
     /// returns every active match in one call, with no cap or pagination.

@@ -9,7 +9,7 @@ use crate::RecordScope;
 ///
 /// Rejection and revocation are both recorded as dedicated boolean fields
 /// (`rejected`, `revoked`) on the request itself rather than by removing the
-/// `access_id` from [`DataKey::PatientIndex`]. The patient index therefore
+/// `access_id` from the patient index. The patient index therefore
 /// always lists every request ever made for a passport, active or not, which
 /// keeps it usable as a full consent trail; callers that need only
 /// currently-valid grants (e.g. [`crate::ConsentAccessManager::check_access`])
@@ -17,24 +17,31 @@ use crate::RecordScope;
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccessRequest {
+    /// Unique identifier allocated when the request was created.
     pub access_id: u64,
+    /// The patient passport whose records this request covers.
     pub passport_id: Address,
+    /// The provider that requested access.
     pub provider_id: Address,
+    /// The record categories the request covers.
     pub record_scope: RecordScope,
     /// The access window the provider asked for, in seconds. Recorded at
     /// request time so approval can derive `expires_at` from the duration the
     /// patient actually saw when consenting.
     pub duration_seconds: u64,
+    /// Whether the patient has approved the request.
     pub approved: bool,
     /// Ledger timestamp at which the grant lapses. `0` until approval, since
     /// an unapproved request has no access window yet.
     pub expires_at: u64,
+    /// Set by `revoke_access` when the patient withdraws the grant.
     pub revoked: bool,
     /// Set by `reject_access` when the patient declines a pending request.
     /// Mutually exclusive with `approved` in normal operation: the contract
     /// refuses to approve a rejected request and refuses to reject an
     /// approved one.
     pub rejected: bool,
+    /// Ledger timestamp at which the request was created.
     pub created_at: u64,
 }
 
