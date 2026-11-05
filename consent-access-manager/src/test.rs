@@ -6,7 +6,7 @@ use soroban_sdk::{Address, Env, Event as _, IntoVal, InvokeError, Symbol, Vec};
 
 use crate::storage::{read_access_request, DataKey};
 use crate::{
-    AccessApproved, AccessRejected, AccessRequested, ConsentAccessManager,
+    AccessApproved, AccessRejected, AccessRequested, AccessRevoked, ConsentAccessManager,
     ConsentAccessManagerClient, Error, RecordScope,
 };
 
@@ -1019,5 +1019,48 @@ fn reject_access_does_not_publish_an_event_when_it_fails() {
         .try_reject_access(&fixture.passport_id, &access_id);
 
     assert_eq!(result, Err(Ok(Error::AlreadyApproved)));
+    assert!(fixture.env.events().all().events().is_empty());
+}
+
+#[test]
+fn revoke_access_publishes_an_access_revoked_event() {
+    let fixture = Fixture::new();
+    fixture.env.mock_all_auths();
+
+    let access_id = fixture.create_and_approve_request(
+        &fixture.provider_id.clone(),
+        RecordScope::LabResultsOnly,
+        ONE_DAY,
+    );
+
+    let revoked_at = REQUESTED_AT + 500;
+    fixture.env.ledger().set_timestamp(revoked_at);
+    fixture
+        .client()
+        .revoke_access(&fixture.passport_id, &access_id);
+
+    let expected = AccessRevoked {
+        access_id,
+        passport_id: fixture.passport_id.clone(),
+        provider_id: fixture.provider_id.clone(),
+        revoked_at,
+    };
+
+    assert_eq!(
+        fixture.env.events().all(),
+        [expected.to_xdr(&fixture.env, &fixture.contract_id)]
+    );
+}
+
+#[test]
+fn revoke_access_does_not_publish_an_event_when_it_fails() {
+    let fixture = Fixture::new();
+    fixture.env.mock_all_auths();
+
+    let result = fixture
+        .client()
+        .try_revoke_access(&fixture.passport_id, &42);
+
+    assert_eq!(result, Err(Ok(Error::RequestNotFound)));
     assert!(fixture.env.events().all().events().is_empty());
 }

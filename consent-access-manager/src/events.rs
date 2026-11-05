@@ -52,3 +52,18 @@ pub struct AccessRejected {
     pub passport_id: Address,
     pub provider_id: Address,
 }
+
+/// Emitted when [`crate::ConsentAccessManager::revoke_access`] revokes a
+/// request, immediately withdrawing any access it granted.
+///
+/// - Topics: `("access", "revoked")`
+/// - Data: `access_id: u64`, `passport_id: Address`, `provider_id: Address`,
+///   `revoked_at: u64` (ledger timestamp of the revocation)
+#[contractevent(topics = ["access", "revoked"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccessRevoked {
+    pub access_id: u64,
+    pub passport_id: Address,
+    pub provider_id: Address,
+    pub revoked_at: u64,
+}
