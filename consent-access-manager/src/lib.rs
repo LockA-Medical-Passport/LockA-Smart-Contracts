@@ -8,7 +8,7 @@ mod storage;
 mod types;
 
 pub use error::Error;
-pub use events::{AccessApproved, AccessRejected, AccessRequested};
+pub use events::{AccessApproved, AccessRejected, AccessRequested, AccessRevoked};
 pub use storage::AccessRequest;
 pub use types::RecordScope;
 
@@ -177,6 +177,14 @@ impl ConsentAccessManager {
 
         request.revoked = true;
         storage::write_access_request(&env, &request);
+
+        AccessRevoked {
+            access_id: request.access_id,
+            passport_id: request.passport_id,
+            provider_id: request.provider_id,
+            revoked_at: env.ledger().timestamp(),
+        }
+        .publish(&env);
 
         Ok(())
     }
